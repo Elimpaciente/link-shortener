@@ -2,60 +2,9 @@ addEventListener('fetch', event => {
   event.respondWith(handleRequest(event.request))
 })
 
-// === CONFIGURACIÓN ===
-// 1. KV_NAMESPACE: Asegúrate de que este nombre coincida con el Binding que configures en Cloudflare.
-const KV_NAMESPACE = SHORT_LINKS; 
-// =====================
-
-// Función para generar una cadena aleatoria (slug)
-async function randomString(len = 6) {
-    const chars = 'ABCDEFGHJKMNPQRSTWXYZabcdefhijkmnprstwxyz23456789';
-    let result = '';
-    for (let i = 0; i < len; i++) {
-        result += chars.charAt(Math.floor(Math.random() * chars.length));
-    }
-    return result;
-}
-
-// Función para validar el formato de URL
-function isValidUrl(url) {
-    try {
-        new URL(url);
-        return true;
-    } catch (e) {
-        return false;
-    }
-}
-
 async function handleRequest(request) {
   const url = new URL(request.url)
-  const path = url.pathname.slice(1); // Obtiene el slug (código corto)
-  const longUrlParam = url.searchParams.get('url'); // Obtiene el parámetro 'url'
-
-  // 1. Lógica de Redirección (para slugs)
-  // Si hay un path (slug) y NO hay un parámetro 'url' (para evitar conflictos)
-  if (path.length > 0 && !longUrlParam) {
-    const longUrl = await KV_NAMESPACE.get(path);
-
-    if (longUrl) {
-      // Redirección 302 (Temporal) a la URL larga almacenada
-      return Response.redirect(longUrl, 302);
-    }
-    // Si no se encuentra el slug, devuelve 404 con el formato JSON del usuario
-    return new Response(JSON.stringify({
-      status_code: 404,
-      developer: 'El Impaciente',
-      telegram_channel: 'https://t.me/Apisimpacientes',
-      message: 'Short URL not found'
-    }), {
-      status: 404,
-      headers: { 'Content-Type': 'application/json' }
-    })
-  }
-
-  // 2. Lógica de Acortamiento (para peticiones con ?url=)
   
-  // Solo permitimos peticiones GET para acortar, como en tu código original
   if (request.method !== 'GET') {
     return new Response(JSON.stringify({
       status_code: 400,
@@ -64,13 +13,15 @@ async function handleRequest(request) {
       message: 'Only GET requests are allowed'
     }), {
       status: 400,
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
+      }
     })
   }
   
-  const longUrl = longUrlParam;
+  const longUrl = url.searchParams.get('url')
   
-  // Validar la presencia del parámetro 'url'
   if (!longUrl || longUrl.trim() === '') {
     return new Response(JSON.stringify({
       status_code: 400,
@@ -79,12 +30,16 @@ async function handleRequest(request) {
       message: 'The url parameter is required'
     }), {
       status: 400,
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
+      }
     })
   }
   
-  // Validar el formato de la URL
-  if (!isValidUrl(longUrl)) {
+  try {
+    new URL(longUrl)
+  } catch (e) {
     return new Response(JSON.stringify({
       status_code: 400,
       developer: 'El Impaciente',
@@ -92,48 +47,70 @@ async function handleRequest(request) {
       message: 'Invalid URL format'
     }), {
       status: 400,
-      headers: { 'Content-Type': 'application/json' }
+      headers: { 
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
+      }
     })
   }
   
-  try {
-    // Generar un slug único
-    let slug;
-    let existingUrl;
-    do {
-        slug = await randomString();
-        existingUrl = await KV_NAMESPACE.get(slug);
-    } while (existingUrl !== null);
-
-    // Almacenar el slug y la URL larga original en KV
-    // El valor de la clave es la URL larga.
-    await KV_NAMESPACE.put(slug, longUrl);
-    
-    // Devolver la URL corta con el dominio del Worker
-    const shortUrlWithDomain = `${url.origin}/${slug}`;
-    
+  const shortenAPIs = [
+    'https://is.gd/create.php?format=simple&url=',
+    'https://clck.ru/--?url=',
+    'https://v.gd/create.php?format=simple&url='
+  ]
+  
+  let shortUrl = null
+  let lastError = null
+  
+  for (const api of shortenAPIs) {
+    try {
+      const response = await fetch(api + encodeURIComponent(longUrl), {
+        method: 'GET',
+        signal: AbortSignal.timeout(10000)
+      })
+      
+      if (response.ok) {
+        const result = await response.text()
+        if (result && result.trim() !== '') {
+          shortUrl = result.trim()
+          break
+        }
+      }
+      
+      lastError = `API returned status ${response.status}`
+    } catch (error) {
+      lastError = error.message
+      continue
+    }
+  }
+  
+  if (shortUrl) {
     return new Response(JSON.stringify({
       status_code: 200,
       developer: 'El Impaciente',
       telegram_channel: 'https://t.me/Apisimpacientes',
-      response: shortUrlWithDomain // Devolvemos la URL con el dominio del Worker
+      response: shortUrl
     }), {
       status: 200,
       headers: { 
         'Content-Type': 'application/json',
-        'Cache-Control': 'public, max-age=3600'
+        'Cache-Control': 'public, max-age=3600',
+        'Access-Control-Allow-Origin': '*'
       }
     })
-    
-  } catch (error) {
+  } else {
     return new Response(JSON.stringify({
-      status_code: 500, // Error interno del servidor
+      status_code: 400,
       developer: 'El Impaciente',
       telegram_channel: 'https://t.me/Apisimpacientes',
-      message: `Error interno del servidor: ${error.message}`
+      message: 'All shortening services failed'
     }), {
-      status: 500,
-      headers: { 'Content-Type': 'application/json' }
+      status: 400,
+      headers: { 
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*'
+      }
     })
   }
 }
