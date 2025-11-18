@@ -2,10 +2,10 @@ addEventListener('fetch', event => {
   event.respondWith(handleRequest(event.request))
 })
 
-// El nombre de tu Namespace KV debe coincidir con el que configuraste en Cloudflare.
-// Cloudflare inyectará automáticamente el objeto global SHORT_LINKS.
-// Si usaste otro nombre, reemplaza SHORT_LINKS con el nombre de tu Namespace.
+// === CONFIGURACIÓN ===
+// 1. KV_NAMESPACE: Asegúrate de que este nombre coincida con el Binding que configures en Cloudflare.
 const KV_NAMESPACE = SHORT_LINKS; 
+// =====================
 
 // Función para generar una cadena aleatoria (slug)
 async function randomString(len = 6) {
@@ -17,13 +17,23 @@ async function randomString(len = 6) {
     return result;
 }
 
+// Función para validar el formato de URL
+function isValidUrl(url) {
+    try {
+        new URL(url);
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
 async function handleRequest(request) {
   const url = new URL(request.url)
   const path = url.pathname.slice(1); // Obtiene el slug (código corto)
   const longUrlParam = url.searchParams.get('url'); // Obtiene el parámetro 'url'
 
   // 1. Lógica de Redirección (para slugs)
-  // Se activa si hay un path (slug) y NO hay un parámetro 'url' (para evitar conflictos)
+  // Si hay un path (slug) y NO hay un parámetro 'url' (para evitar conflictos)
   if (path.length > 0 && !longUrlParam) {
     const longUrl = await KV_NAMESPACE.get(path);
 
@@ -31,7 +41,7 @@ async function handleRequest(request) {
       // Redirección 302 (Temporal) a la URL larga almacenada
       return Response.redirect(longUrl, 302);
     }
-    // Si no se encuentra el slug, devuelve 404
+    // Si no se encuentra el slug, devuelve 404 con el formato JSON del usuario
     return new Response(JSON.stringify({
       status_code: 404,
       developer: 'El Impaciente',
@@ -60,6 +70,7 @@ async function handleRequest(request) {
   
   const longUrl = longUrlParam;
   
+  // Validar la presencia del parámetro 'url'
   if (!longUrl || longUrl.trim() === '') {
     return new Response(JSON.stringify({
       status_code: 400,
@@ -72,9 +83,8 @@ async function handleRequest(request) {
     })
   }
   
-  try {
-    new URL(longUrl)
-  } catch (e) {
+  // Validar el formato de la URL
+  if (!isValidUrl(longUrl)) {
     return new Response(JSON.stringify({
       status_code: 400,
       developer: 'El Impaciente',
@@ -96,6 +106,7 @@ async function handleRequest(request) {
     } while (existingUrl !== null);
 
     // Almacenar el slug y la URL larga original en KV
+    // El valor de la clave es la URL larga.
     await KV_NAMESPACE.put(slug, longUrl);
     
     // Devolver la URL corta con el dominio del Worker
